@@ -1,2 +1,2 @@
-# etherhedge
+# EtherHedge
 Decentralized Derivative Platform
