@@ -5,7 +5,6 @@ import "./Settings.sol";
 import "./Depository.sol";
 import "./Redeployer.sol";
 
-   
 contract FutureContract {
     
     using SafeMath for uint256;
