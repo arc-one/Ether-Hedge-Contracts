@@ -1,0 +1,8 @@
+{
+  "name": "etherhedge",
+  "version": "0.0.0",
+  "private": true,
+  "dependencies": {
+    "openzeppelin-solidity": "^2.3.0",
+  }
+}
