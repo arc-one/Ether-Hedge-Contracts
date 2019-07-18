@@ -53,6 +53,8 @@ contract Depository is ReentrancyGuard{
         priceFeedSource = _priceFeedSource;
     }
 
+
+
     function deposit() public payable {
         uint256 amount = msg.value;
         balances[msg.sender] = balances[msg.sender].add(amount);
@@ -177,7 +179,6 @@ contract Depository is ReentrancyGuard{
         }
         return discountPercent;
     }
-
 
     function getAccountStakePercent(address account) public view returns (uint256){
         if(totalStakedFunds==0) return 0;

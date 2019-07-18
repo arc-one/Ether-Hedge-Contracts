@@ -82,10 +82,10 @@ contract FutureContract {
     mapping (address => Position) public positions;
     mapping (bytes32 => uint256) public orderFills;
     
-    event LimitOrderLog(address addr, uint256 price, uint256 amount, uint256 orderType, bytes32 hash, uint256 leverage, uint256 expires);
+    event LimitOrderLog(address indexed addr, uint256 price, uint256 amount, uint256 orderType, bytes32 hash, uint256 leverage, uint256 expires);
     event MarketOrderLog(bytes32 orderHash, uint256 amount, uint256 price, uint256 positionType, address orderUser, address tradeUser, uint256 timestamp);
-    event LiquidatedPosLog(uint256 amount, uint256 price, uint256 positionType, address account, uint256 timestamp);
-    event ExpiratedPosLog(uint256 amount, uint256 price, uint256 positionType, address account, uint256 timestamp);
+    event LiquidatedPosLog(uint256 amount, uint256 price, uint256 positionType, address indexed account, uint256 timestamp);
+    event ExpiratedPosLog(uint256 amount, uint256 price, uint256 positionType, address indexed account, uint256 timestamp);
 
     function placeLimitOrder(uint256 price, uint256 amount, uint256 orderType, uint256 leverage, uint256 expiresIn) public returns (bytes32){
         isValid(price, amount, orderType, leverage);
