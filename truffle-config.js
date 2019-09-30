@@ -15,31 +15,33 @@ module.exports = {
     development: {
       host: "127.0.0.1",
       port: 8545,
-      network_id: "*"
+      network_id: "*",
+      gas: 6700000
     },
     test: {
       host: "127.0.0.1",
       port: 8545,
-      network_id: "*"
+      network_id: "*",
+      gas: 6700000
     },
     kovan_infura: {
-      provider: () => new HDWalletProvider(mnemonic, "https://kovan.infura.io/a742fdcf0d85454ba43aa0169a2a9877"),
+      provider: () => new HDWalletProvider(mnemonic, "https://kovan.infura.io/v3/18d43f3c5df04995b631924d5203aec7"),
       network_id: 42,
-      gas: 470000
+      gas: 6700000
     },
     ropsten_infura: {
-      provider: () => new HDWalletProvider(mnemonic, "https://ropsten.infura.io/a742fdcf0d85454ba43aa0169a2a9877"),
+      provider: () => new HDWalletProvider(mnemonic, "https://ropsten.infura.io/v3/18d43f3c5df04995b631924d5203aec7"),
       network_id: 3,
-      gas: 4700000
+      gas: 6700000
     },
-
+/*
     ropsten: {
       host: "127.0.0.1",
       port: 8545,
       network_id: 3,
-      gas: 470000
+      gas: 1000000
     },
-
+*/
   },
   mocha: {
     enableTimeouts: false

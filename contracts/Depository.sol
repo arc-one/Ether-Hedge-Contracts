@@ -2,11 +2,14 @@ pragma solidity ^0.5.0;
 
 import "openzeppelin-solidity/contracts/utils/ReentrancyGuard.sol";
 import "openzeppelin-solidity/contracts/math/SafeMath.sol";
-import "./Oracle/PriceFeed.sol";
 import "./Oracle/Medianizer.sol";
 import "./Token.sol";
 import "./Settings.sol";
 
+/**
+ * @title Depository
+ * @dev The contract stores and manages all the funds of the project.
+ */
 contract Depository is ReentrancyGuard{
 
     using SafeMath for uint256;
@@ -14,6 +17,7 @@ contract Depository is ReentrancyGuard{
     ERC20Mintable token;
     ERC20 mainToken;
     Settings settings;
+    
 
     struct Staker {
         uint256 amount;
@@ -23,71 +27,71 @@ contract Depository is ReentrancyGuard{
     mapping(address => Staker) private stakedFunds;
     mapping(address => uint256) private balances;
     mapping(address => uint256) private availableBalances;
-    
-    uint256 public totalBalance;
+    mapping(address => uint256) private releasedDividends;
+
     uint256 public totalStakedFunds;
     uint256 public totalDividends;
-    uint256 public allTimeTotalProfit;
+    uint256 public allTimeProfit;
     uint256 public marginBank;
-    uint256 private percentMultiplyer;
-    address public devAccount;
-    address public priceFeedSource;
+    uint256 public debt;
+
+    uint256 private percentMultiplyer = 100;
 
     event Deposited(address indexed payee, uint256 weiAmount);
     event Withdrawn(address indexed payee, uint256 weiAmount);
     event Staked(address indexed payee, uint256 weiAmount);
     event Unstaked(address indexed payee, uint256 weiAmount);
-
+    event DividendsLog(address indexed account, uint256 amount, uint256 allTimeProfit);
+    event RecievedLog(address account, uint256 amount);
+    
+    /**
+     * @dev Constructor
+     */
     constructor (
         address _settingsAddress,
         address _tokenAddress,
-        address _mainTokenAddress,
-        uint256 _percentMultiplyer,
-        address _priceFeedSource
-    ) public {
+        address _mainTokenAddress
+    ) public payable {
         token = Token(_tokenAddress);
         mainToken = Token(_mainTokenAddress);
         settings = Settings(_settingsAddress);
-        percentMultiplyer = _percentMultiplyer;
-        devAccount = settings.getDevAccount();
-        priceFeedSource = _priceFeedSource;
     }
 
-
+    /**
+     * @dev payable fallback
+     */
+    function() external payable {
+        allTimeProfit = allTimeProfit.add(msg.value);
+        emit RecievedLog(msg.sender, msg.value);
+     }
 
     function deposit() public payable {
         uint256 amount = msg.value;
         balances[msg.sender] = balances[msg.sender].add(amount);
         availableBalances[msg.sender] = availableBalances[msg.sender].add(amount);
-        totalBalance = totalBalance.add(amount);
         emit Deposited(msg.sender, amount);
     }
 
     function withdraw(uint256 amount) public nonReentrant{
         require(availableBalances[msg.sender] >= amount);
         balances[msg.sender] = balances[msg.sender].sub(amount);
-        totalBalance = totalBalance.sub(amount);
+        availableBalances[msg.sender] = availableBalances[msg.sender].sub(amount);
         msg.sender.transfer(amount);
-
         emit Withdrawn(msg.sender, amount);
-    }
-
-    function withdrawAll() public {
-        withdraw(balances[msg.sender]);
     }
 
     function stake(uint256 tokens) public payable {
         require(msg.sender != address(0) && tokens != 0);
         getDividends();
+        ERC20(address(mainToken)).transferFrom(msg.sender, address(this), tokens);
         totalStakedFunds = totalStakedFunds.add(tokens);
         stakedFunds[msg.sender].amount = stakedFunds[msg.sender].amount.add(tokens);
-        ERC20(address(mainToken)).transferFrom(msg.sender, address(this), tokens);
         emit Staked(msg.sender, tokens);
     }
 
-
-    function unstake(uint256 amount) public nonReentrant {
+    function unstake(uint256 amount) public  {
         require(amount <= stakedFunds[msg.sender].amount && msg.sender != address(0));
+        require (!settings.stakeIsLocked(msg.sender));
         getDividends();
         totalStakedFunds = totalStakedFunds.sub(amount);
         stakedFunds[msg.sender].amount = stakedFunds[msg.sender].amount.sub(amount);
@@ -95,21 +99,24 @@ contract Depository is ReentrancyGuard{
         emit Unstaked(msg.sender, amount);
     }
 
-    function getDividends() public  {
-        uint256 accountProfit =  calcAccountProfit();
+    function getDividends() public {
+        uint256 accountProfit = calcAccountProfit();
         if (accountProfit>0) {
-            stakedFunds[msg.sender].prevAllTimeProfit = allTimeTotalProfit;
-            totalDividends = totalDividends.add(accountProfit);           
             msg.sender.transfer(accountProfit);
+            stakedFunds[msg.sender].prevAllTimeProfit = allTimeProfit;
+            totalDividends = totalDividends.add(accountProfit);    
+            releasedDividends[msg.sender] = releasedDividends[msg.sender].add(accountProfit); 
+            emit DividendsLog(msg.sender, accountProfit, allTimeProfit);    
+        } else {
+            stakedFunds[msg.sender].prevAllTimeProfit = allTimeProfit;
         }
     }
 
-    function updateBalances (address account, uint256 balance, uint256 availableBalance, uint256 feeValue) public  {
+
+    function updateBalances (address account, uint256 balance, uint256 availableBalance, uint256 feeValue, bool closePosition) public  {
         require(
-            settings.isContractTrusted(msg.sender) && 
-            settings.isContractNotExpired(msg.sender) && 
-          //  totalBalance >= balance &&
-            token.isMinter(address(this))
+            settings.contractIsTrusted(msg.sender) && 
+            (settings.contractIsNotExpired(msg.sender) || closePosition)
         );
 
         // if a loss occurs, create new tokens
@@ -120,50 +127,52 @@ contract Depository is ReentrancyGuard{
 
         uint256 discountPercent = calcDiscountFeePercent(account, feeValue);
         uint256 feeValueWithDiscount = calcFeeValueWithDiscount(discountPercent, feeValue);
-        (balances[account], availableBalances[account], totalBalance, marginBank) = calcBalances (account, balance, availableBalance, feeValueWithDiscount);
 
-        allTimeTotalProfit = allTimeTotalProfit.add(feeValueWithDiscount);
+        allTimeProfit = allTimeProfit.add(feeValueWithDiscount);
+
+        if(availableBalance >= feeValueWithDiscount) {
+            balance = balance.sub(feeValueWithDiscount);
+            availableBalance = availableBalance.sub(feeValueWithDiscount);   
+        }
+
+        balances[account] = balance;
+        availableBalances[account] = availableBalance; 
 
     }
 
-
-    function calcBalances (address account, uint256 balance, uint256 availableBalance, uint256 feeValueWithDiscount) private view returns(uint256 _balance, uint256 _availableBalance, uint256 _newTotalBalance, uint256 _newMarginBank)  {
-        
-        uint256 diff;
-        uint256 newMarginBank;
-        uint256 newTotalBalance = totalBalance.add(balance).sub(balances[account]).sub(feeValueWithDiscount);
-        uint256 availableTotalBalance = address(this).balance.sub(allTimeTotalProfit).sub(marginBank);
-
-        if(newTotalBalance > availableTotalBalance) {
-            diff = newTotalBalance.sub(availableTotalBalance);
-            newTotalBalance = availableTotalBalance;
-        }
-
-        if(marginBank >= diff) {
-            newMarginBank = marginBank.sub(diff);
+    function decreaseMarginBank(uint256 sum) public {
+        require(settings.contractIsTrusted(msg.sender));
+        if(marginBank>=sum) {
+            marginBank = marginBank.sub(sum);
         } else {
-            newMarginBank = 0;
+            debt = debt.add(sum.sub(marginBank));
+            marginBank = 0;
         }
-
-        balance = balance.sub(diff).sub(feeValueWithDiscount);
-        availableBalance = availableBalance.sub(diff).sub(feeValueWithDiscount);
-
-        return (balance, availableBalance, newTotalBalance, newMarginBank);
-
     }
+
     
-    function setLiquidationProfit(uint256 profit) public {
-        require(settings.isContractTrusted(msg.sender));
+    function setProfit(uint256 profit) public {
+        require(settings.contractIsTrusted(msg.sender));
 
         // the profit splitting on 2 parts: 
         // 1 - profit that all stakeholders take. Percentage is specified in liquidationProfit();
-        uint256 liquidationProfitValue = profit.mul(settings.liquidationProfit()).div(100);
+        uint256 liquidationProfitValue = profit.mul(settings.getLiquidationProfit()).div(percentMultiplyer.mul(100));
          
-        allTimeTotalProfit = allTimeTotalProfit.add(liquidationProfitValue);
-        totalBalance = totalBalance.sub(liquidationProfitValue);
+        allTimeProfit = allTimeProfit.add(liquidationProfitValue);
 
-        // 2 - the rest goes to the margin bank fund
-        marginBank = marginBank.add(profit.sub(liquidationProfitValue));
+        // 2 - the rest goes to the margin bank fund. If the system has a debt we cover debt.
+        uint256 marginBankProfitValue = profit.mul(percentMultiplyer.mul(100).sub(settings.getLiquidationProfit())).div(percentMultiplyer.mul(100));
+        if(debt > marginBank) {
+            if(debt > marginBankProfitValue) {
+                debt = debt.sub(marginBankProfitValue);
+            } else {
+                debt=0;
+                marginBank = marginBank.add(debt.sub(marginBank));
+            }
+        } else {
+            marginBank = marginBank.add(profit.sub(marginBankProfitValue));
+        }
+        
     }
 
     /// View methods
@@ -173,8 +182,8 @@ contract Depository is ReentrancyGuard{
         uint256 accountTokenBalance = token.balanceOf(account);
         uint256 tokenTotalSupply = token.totalSupply();
 
-        if(tokenTotalSupply>0) discountPercent = accountTokenBalance.mul(percentMultiplyer.mul(100)).mul(settings.feeDiscountIndex()).div(tokenTotalSupply);
-        if(feeValue==0 || discountPercent >= percentMultiplyer.mul(percentMultiplyer)) {
+        if(tokenTotalSupply>0) discountPercent = accountTokenBalance.mul(percentMultiplyer.mul(100)).mul(settings.getFeeDiscountIndex()).div(tokenTotalSupply);
+        if(feeValue == 0 || discountPercent >= percentMultiplyer.mul(percentMultiplyer)) {
             return percentMultiplyer.mul(100);
         }
         return discountPercent;
@@ -186,9 +195,8 @@ contract Depository is ReentrancyGuard{
     }
 
     function calcAccountProfit() public view returns (uint256){
-        //if(stakedFunds[msg.sender].amount == 0) return 0;
         uint256 stakePercent = getAccountStakePercent(msg.sender);
-        uint256 unreleasedProfit = allTimeTotalProfit.sub(stakedFunds[msg.sender].prevAllTimeProfit);
+        uint256 unreleasedProfit = allTimeProfit.sub(stakedFunds[msg.sender].prevAllTimeProfit);
         uint256 profit = unreleasedProfit.mul(stakePercent).div(percentMultiplyer.mul(100));
         return profit;
     }
@@ -217,10 +225,10 @@ contract Depository is ReentrancyGuard{
     }
 
     /// @dev returns the USDETH price, ie gets the USD price from Maker feed with 9 digits
-    function getUSDETHPrice() public pure returns (uint256) {
+    function getUSDETHPrice() public view returns (uint256) {
 
-        //(bytes32 price, ) = Medianizer(priceFeedSource).peek();
-        uint256 price = 140000000000000000000; //only for testing purposes
+        (bytes32 price, ) = Medianizer(settings.getPriceFeedSource()).peek();
+       // uint256 price = 230000000000000000000; //only for testing purposes
         
         // ensuring that there is no underflow or overflow possible,
         // even if the price is compromised
@@ -234,12 +242,5 @@ contract Depository is ReentrancyGuard{
         }
         return priceUint;
     }
-
-    //////// testing 
-    function getWalletBalance (address account) public view returns(uint256) {
-        return address(account).balance;
-    }
-
-
 
 }
